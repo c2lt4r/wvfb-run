@@ -14,8 +14,7 @@ use windows::{
     Win32::{
         Foundation::*,
         System::{
-            Console::*, Diagnostics::Debug::*, JobObjects::*, StationsAndDesktops::*,
-            Threading::*,
+            Console::*, Diagnostics::Debug::*, JobObjects::*, StationsAndDesktops::*, Threading::*,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -40,7 +39,10 @@ fn main() {
 #[derive(Debug, PartialEq)]
 enum Cli {
     Help,
-    Run { timeout: Duration, argv: Vec<OsString> },
+    Run {
+        timeout: Duration,
+        argv: Vec<OsString>,
+    },
 }
 
 /// Our flags come first; everything from COMMAND on is passed through untouched.
@@ -51,7 +53,10 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> std::result::Result<C
         match a {
             "--timeout" => {
                 args.next();
-                let secs: f64 = args.next().and_then(|s| s.to_str()?.parse().ok()).ok_or(USAGE)?;
+                let secs: f64 = args
+                    .next()
+                    .and_then(|s| s.to_str()?.parse().ok())
+                    .ok_or(USAGE)?;
                 timeout = Duration::try_from_secs_f64(secs).map_err(|_| USAGE)?;
             }
             "--" => {
@@ -77,6 +82,15 @@ fn run() -> std::result::Result<i32, Box<dyn std::error::Error>> {
         }
         Cli::Run { timeout, argv } => (timeout, argv),
     };
+    // A Windows filename can't contain quotes; they mean the caller quoted twice.
+    // CreateProcess would misparse them (e.g. run "\" and report access denied).
+    if argv[0].to_string_lossy().contains('"') {
+        return Err(format!(
+            "program path contains literal quotes ({}), check your quoting",
+            argv[0].display()
+        )
+        .into());
+    }
     let mut cmdline = Vec::new();
     for (i, a) in argv.iter().enumerate() {
         if i > 0 {
@@ -89,7 +103,14 @@ fn run() -> std::result::Result<i32, Box<dyn std::error::Error>> {
     unsafe {
         // Desktop lives on our own window station; destroyed when the last handle/thread goes.
         let name = format!("wvfb-{}", std::process::id());
-        let hdesk = CreateDesktopW(&HSTRING::from(&name), None, None, DESKTOP_CONTROL_FLAGS(0), GENERIC_ALL.0, None)?;
+        let hdesk = CreateDesktopW(
+            &HSTRING::from(&name),
+            None,
+            None,
+            DESKTOP_CONTROL_FLAGS(0),
+            GENERIC_ALL.0,
+            None,
+        )?;
         let mut desk: Vec<u16> = name.encode_utf16().chain([0]).collect();
 
         // Job: kill the whole tree when we exit, and crash instead of showing the WER dialog.
@@ -155,7 +176,10 @@ fn run() -> std::result::Result<i32, Box<dyn std::error::Error>> {
             }
             let now = Instant::now();
             if hang.stuck(scan.hung, job_cpu(job), now) {
-                eprintln!("wvfb-run: not responding and idle for {}s, killing", HANG_LIMIT.as_secs());
+                eprintln!(
+                    "wvfb-run: not responding and idle for {}s, killing",
+                    HANG_LIMIT.as_secs()
+                );
                 let _ = TerminateJobObject(job, 124);
                 return Ok(124);
             }
@@ -221,7 +245,11 @@ struct Scan {
 unsafe fn scan_desktop(hdesk: HDESK) -> Scan {
     let mut scan = Scan::default();
     unsafe {
-        let _ = EnumDesktopWindows(Some(hdesk), Some(on_window), LPARAM(&mut scan as *mut _ as isize));
+        let _ = EnumDesktopWindows(
+            Some(hdesk),
+            Some(on_window),
+            LPARAM(&mut scan as *mut _ as isize),
+        );
     }
     scan
 }
@@ -239,7 +267,11 @@ unsafe extern "system" fn on_window(hwnd: HWND, lp: LPARAM) -> BOOL {
             return TRUE;
         }
         let mut text = window_text(hwnd);
-        let _ = EnumChildWindows(Some(hwnd), Some(on_child), LPARAM(&mut text as *mut _ as isize));
+        let _ = EnumChildWindows(
+            Some(hwnd),
+            Some(on_child),
+            LPARAM(&mut text as *mut _ as isize),
+        );
         scan.dialog = Some(text);
         FALSE
     }
@@ -277,7 +309,11 @@ fn window_text(hwnd: HWND) -> String {
 fn quote(arg: &OsStr, out: &mut Vec<u16>) {
     let a: Vec<u16> = arg.encode_wide().collect();
     let (bs, dq) = ('\\' as u16, '"' as u16);
-    if !a.is_empty() && !a.iter().any(|&c| c == ' ' as u16 || c == '\t' as u16 || c == dq) {
+    if !a.is_empty()
+        && !a
+            .iter()
+            .any(|&c| c == ' ' as u16 || c == '\t' as u16 || c == dq)
+    {
         out.extend(a);
         return;
     }
@@ -289,7 +325,10 @@ fn quote(arg: &OsStr, out: &mut Vec<u16>) {
             continue;
         }
         // Backslashes are literal unless they precede a quote.
-        out.extend(repeat_n(bs, if c == dq { slashes * 2 + 1 } else { slashes }));
+        out.extend(repeat_n(
+            bs,
+            if c == dq { slashes * 2 + 1 } else { slashes },
+        ));
         out.push(c);
         slashes = 0;
     }
@@ -306,15 +345,27 @@ mod tests {
     fn parse_args_cases() {
         let parse = |a: &[&str]| parse_args(a.iter().map(OsString::from));
         let run = |secs: u64, argv: &[&str]| {
-            Ok(Cli::Run { timeout: Duration::from_secs(secs), argv: argv.iter().map(OsString::from).collect() })
+            Ok(Cli::Run {
+                timeout: Duration::from_secs(secs),
+                argv: argv.iter().map(OsString::from).collect(),
+            })
         };
 
         assert_eq!(parse(&["a.exe"]), run(30, &["a.exe"]));
         // Flags after COMMAND belong to the command.
-        assert_eq!(parse(&["--timeout", "5", "a.exe", "--timeout", "x"]), run(5, &["a.exe", "--timeout", "x"]));
+        assert_eq!(
+            parse(&["--timeout", "5", "a.exe", "--timeout", "x"]),
+            run(5, &["a.exe", "--timeout", "x"])
+        );
         assert_eq!(parse(&["--", "--help"]), run(30, &["--help"]));
         assert_eq!(parse(&["--help"]), Ok(Cli::Help));
-        for bad in [&[][..], &["--timeout"], &["--timeout", "abc", "a.exe"], &["--timeout", "-5", "a.exe"], &["--"]] {
+        for bad in [
+            &[][..],
+            &["--timeout"],
+            &["--timeout", "abc", "a.exe"],
+            &["--timeout", "-5", "a.exe"],
+            &["--"],
+        ] {
             assert_eq!(parse(bad), Err(USAGE), "{bad:?}");
         }
     }
@@ -348,7 +399,16 @@ mod tests {
 
     #[test]
     fn quote_roundtrips_through_commandlinetoargvw() {
-        let cases = ["plain", "", "with space", r#"a"b"#, r"trail\", r"C:\dir with\", r#"x\"y"#, r"a\\b"];
+        let cases = [
+            "plain",
+            "",
+            "with space",
+            r#"a"b"#,
+            r"trail\",
+            r"C:\dir with\",
+            r#"x\"y"#,
+            r"a\\b",
+        ];
         let mut line: Vec<u16> = "prog".encode_utf16().collect();
         for c in cases {
             line.push(' ' as u16);
@@ -357,8 +417,9 @@ mod tests {
         line.push(0);
         let mut n = 0;
         let argv = unsafe { CommandLineToArgvW(PCWSTR(line.as_ptr()), &mut n) };
-        let got: Vec<String> =
-            (1..n as usize).map(|i| unsafe { (*argv.add(i)).to_string().unwrap() }).collect();
+        let got: Vec<String> = (1..n as usize)
+            .map(|i| unsafe { (*argv.add(i)).to_string().unwrap() })
+            .collect();
         assert_eq!(got, cases);
     }
 }

@@ -4,7 +4,10 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 fn wvfb(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_wvfb-run")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_wvfb-run"))
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 #[test]
@@ -39,4 +42,11 @@ fn dialog_kills_with_125() {
 #[test]
 fn missing_program_is_127() {
     assert_eq!(wvfb(&["wvfb-no-such-program"]).status.code(), Some(127));
+}
+
+#[test]
+fn quoted_program_path_is_rejected() {
+    let o = wvfb(&[r#""C:\Windows\System32\cmd.exe""#, "/c", "exit 0"]);
+    assert_eq!(o.status.code(), Some(127));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("literal quotes"));
 }
