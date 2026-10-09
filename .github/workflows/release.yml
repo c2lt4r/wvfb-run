@@ -1,0 +1,19 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+      - run: gh release create "${{ github.ref_name }}" target/release/wvfb-run.exe --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
